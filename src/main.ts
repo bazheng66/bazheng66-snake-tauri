@@ -1,15 +1,41 @@
 import { invoke } from '@tauri-apps/api/core';
 
 // Game state interface (mirrors the Rust `GameState` struct)
+interface GameSettings {
+  sound_enabled: boolean;
+  theme: string;
+  difficulty: string;
+}
+
 interface GameStats {
   high_score: number;
   games_played: number;
   total_score: number;
-  settings: {
-    sound_enabled: boolean;
-    theme: string;
-    difficulty: string;
-  };
+  settings: GameSettings;
+}
+
+/** Milliseconds per step for each difficulty (matches patorjk/JavaScript-Snake). */
+const DIFFICULTY_STEP_MS: Record<string, number> = {
+  easy: 100,
+  medium: 75,
+  hard: 50,
+  impossible: 25,
+  rush: 110,
+};
+
+const RUSH_DECREMENT_MS = 5;
+const RUSH_FLOOR_MS = 25;
+const DEFAULT_DIFFICULTY = 'medium';
+
+function normalizeDifficulty(raw: string | undefined | null): string {
+  if (raw && raw in DIFFICULTY_STEP_MS) return raw;
+  // Legacy save used "normal"; treat it as medium.
+  if (raw === 'normal') return DEFAULT_DIFFICULTY;
+  return DEFAULT_DIFFICULTY;
+}
+
+function baseStepMs(difficulty: string): number {
+  return DIFFICULTY_STEP_MS[normalizeDifficulty(difficulty)];
 }
 
 // Tauri backend integration
@@ -19,6 +45,9 @@ class TauriGameManager {
   async init() {
     try {
       this.gameStats = await invoke<GameStats>('load_game_state');
+      this.gameStats.settings.difficulty = normalizeDifficulty(
+        this.gameStats.settings.difficulty
+      );
       this.updateUI();
       console.log('✅ Game state loaded from Tauri backend:', this.gameStats);
     } catch (error) {
@@ -30,7 +59,7 @@ class TauriGameManager {
         settings: {
           sound_enabled: true,
           theme: 'classic',
-          difficulty: 'normal'
+          difficulty: DEFAULT_DIFFICULTY
         }
       };
     }
@@ -67,10 +96,44 @@ class TauriGameManager {
       await invoke('reset_stats');
       await invoke('save_game_state');
       this.gameStats = await invoke<GameStats>('get_game_stats');
+      this.gameStats.settings.difficulty = normalizeDifficulty(
+        this.gameStats.settings.difficulty
+      );
       this.updateUI();
     } catch (error) {
       console.error('Failed to reset stats:', error);
     }
+  }
+
+  getDifficulty(): string {
+    return normalizeDifficulty(this.gameStats?.settings.difficulty);
+  }
+
+  getSettings(): GameSettings {
+    return {
+      sound_enabled: this.gameStats?.settings.sound_enabled ?? true,
+      theme: this.gameStats?.settings.theme ?? 'classic',
+      difficulty: this.getDifficulty()
+    };
+  }
+
+  /** Persist difficulty (and current sound/theme) via update_settings + save_game_state. */
+  async setDifficulty(difficulty: string): Promise<string> {
+    const next = normalizeDifficulty(difficulty);
+    const settings: GameSettings = {
+      ...this.getSettings(),
+      difficulty: next
+    };
+    try {
+      await invoke('update_settings', { settings });
+      await invoke('save_game_state');
+      if (this.gameStats) {
+        this.gameStats.settings = settings;
+      }
+    } catch (error) {
+      console.error('Failed to save difficulty:', error);
+    }
+    return next;
   }
 
   updateUI() {
@@ -78,9 +141,11 @@ class TauriGameManager {
 
     const highScoreEl = document.getElementById('high-score');
     const gamesPlayedEl = document.getElementById('games-played');
+    const difficultyEl = document.getElementById('select-difficulty') as HTMLSelectElement | null;
 
     if (highScoreEl) highScoreEl.textContent = this.gameStats.high_score.toString();
     if (gamesPlayedEl) gamesPlayedEl.textContent = this.gameStats.games_played.toString();
+    if (difficultyEl) difficultyEl.value = this.getDifficulty();
   }
 
   showNotification(title: string, score: number) {
@@ -113,9 +178,6 @@ const KEY_TO_DIRECTION: Record<string, Point> = {
   ArrowRight: RIGHT, d: RIGHT, D: RIGHT,
 };
 
-const START_STEP_MS = 120;
-const MIN_STEP_MS = 55;
-const STEP_DECREMENT_MS = 3;
 const MAX_QUEUED_TURNS = 2;
 
 class SnakeGame {
@@ -129,7 +191,8 @@ class SnakeGame {
   // Turns pressed between ticks, so quick double-taps are applied in order
   private turnQueue: Point[] = [];
   private score = 0;
-  private stepMs = START_STEP_MS;
+  private difficulty = DEFAULT_DIFFICULTY;
+  private stepMs = baseStepMs(DEFAULT_DIFFICULTY);
   private status: GameStatus = 'idle';
   private won = false;
   private rafId = 0;
@@ -153,6 +216,16 @@ class SnakeGame {
     this.setupControls();
     this.draw();
     this.onStatusChange(this.status);
+  }
+
+  setDifficulty(difficulty: string) {
+    this.difficulty = normalizeDifficulty(difficulty);
+    // Apply the new base speed immediately (Rush restarts at 110).
+    this.stepMs = baseStepMs(this.difficulty);
+  }
+
+  getDifficulty() {
+    return this.difficulty;
   }
 
   newGame() {
@@ -181,7 +254,7 @@ class SnakeGame {
     this.direction = RIGHT;
     this.turnQueue = [];
     this.score = 0;
-    this.stepMs = START_STEP_MS;
+    this.stepMs = baseStepMs(this.difficulty);
     this.won = false;
     this.placeFood();
   }
@@ -298,7 +371,10 @@ class SnakeGame {
     if (willEat) {
       this.score++;
       tauriManager.updateScore(this.score);
-      this.stepMs = Math.max(MIN_STEP_MS, this.stepMs - STEP_DECREMENT_MS);
+      // Only Rush accelerates: -5ms per food, floor 25ms (other modes stay fixed).
+      if (this.difficulty === 'rush') {
+        this.stepMs = Math.max(RUSH_FLOOR_MS, this.stepMs - RUSH_DECREMENT_MS);
+      }
       if (!this.placeFood()) {
         this.won = true;
         this.gameOver();
@@ -402,11 +478,23 @@ async function initApp() {
   const btnNewGame = document.getElementById('btn-new-game');
   const btnPause = document.getElementById('btn-pause') as HTMLButtonElement | null;
   const btnResetStats = document.getElementById('btn-reset-stats');
+  const selectDifficulty = document.getElementById('select-difficulty') as HTMLSelectElement | null;
 
   const game = new SnakeGame('game-area', (status) => {
     if (!btnPause) return;
     btnPause.textContent = status === 'paused' ? 'Resume' : 'Pause';
     btnPause.disabled = status !== 'running' && status !== 'paused';
+  });
+
+  // Restore difficulty from disk and sync the dropdown + game speed
+  const savedDifficulty = tauriManager.getDifficulty();
+  game.setDifficulty(savedDifficulty);
+  if (selectDifficulty) selectDifficulty.value = savedDifficulty;
+
+  selectDifficulty?.addEventListener('change', async () => {
+    const next = await tauriManager.setDifficulty(selectDifficulty.value);
+    game.setDifficulty(next);
+    selectDifficulty.blur();
   });
 
   // Blur after clicking so Space/Enter go to the game instead of re-clicking the button
@@ -424,6 +512,9 @@ async function initApp() {
     btnResetStats.blur();
     if (confirm('Are you sure you want to reset all stats?')) {
       await tauriManager.resetStats();
+      const difficulty = tauriManager.getDifficulty();
+      game.setDifficulty(difficulty);
+      if (selectDifficulty) selectDifficulty.value = difficulty;
     }
   });
 
