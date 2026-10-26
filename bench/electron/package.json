@@ -1,0 +1,13 @@
+{
+  "name": "snake-electron-bench",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Same Snake frontend (../../dist) hosted in Electron, for an apples-to-apples size/memory comparison",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^45.0.0"
+  }
+}
