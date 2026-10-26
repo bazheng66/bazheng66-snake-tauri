@@ -32,7 +32,7 @@ impl Default for GameState {
             total_score: 0,
             settings: GameSettings {
                 sound_enabled: true,
-                theme: "classic".to_string(),
+                theme: "main".to_string(),
                 difficulty: "medium".to_string(),
             },
         }

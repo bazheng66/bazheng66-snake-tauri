@@ -38,6 +38,83 @@ function baseStepMs(difficulty: string): number {
   return DIFFICULTY_STEP_MS[normalizeDifficulty(difficulty)];
 }
 
+/** Canvas color palettes adapted from patorjk/JavaScript-Snake CSS themes. */
+interface ThemePalette {
+  background: string;
+  grid: string;
+  snakeHead: string;
+  snakeBody: string;
+  food: string;
+  overlayTitle: string;
+  overlayText: string;
+}
+
+const THEME_PALETTES: Record<string, ThemePalette> = {
+  // Main Theme by patorjk — blue field, yellow snakeblock.png, red food
+  main: {
+    background: '#0000a8',
+    grid: '#000080',
+    snakeHead: '#ffff54',
+    snakeBody: '#f0f050',
+    food: '#ff0000',
+    overlayTitle: '#fcfc54',
+    overlayText: '#ffffff',
+  },
+  // Dark Theme by KenyStev — purple field, dark teal body / white highlights
+  dark: {
+    background: '#312e44',
+    grid: '#241f33',
+    snakeHead: '#f0f0f0',
+    snakeBody: '#102020',
+    food: '#000000',
+    overlayTitle: '#938996',
+    overlayText: '#c4bbc9',
+  },
+  // Matrix Theme by Geahad Haymor — black field, green snake, red food
+  matrix: {
+    background: '#000000',
+    grid: '#003b08',
+    snakeHead: '#00ff11',
+    snakeBody: '#00a050',
+    food: '#d00000',
+    overlayTitle: '#00ff11',
+    overlayText: '#00ff11',
+  },
+  // Neon Theme by Daisy21000 — cyan field, neon-yellow body, red food
+  neon: {
+    background: '#00ffd4',
+    grid: '#00d9b5',
+    snakeHead: '#0fff00',
+    snakeBody: '#f0f000',
+    food: '#ff0000',
+    overlayTitle: '#0fff00',
+    overlayText: '#000000',
+  },
+  // Golden Theme By JosephVoboril29 — gold field / head, copper body, amber food
+  golden: {
+    background: '#b9a21d',
+    grid: '#9a8919',
+    snakeHead: '#ffe81c',
+    snakeBody: '#c4480f',
+    food: '#ffbb00',
+    overlayTitle: '#ffe81c',
+    overlayText: '#ffffff',
+  },
+};
+
+const DEFAULT_THEME = 'main';
+
+function normalizeTheme(raw: string | undefined | null): string {
+  if (raw && raw in THEME_PALETTES) return raw;
+  // Legacy save used "classic" before named themes existed.
+  if (raw === 'classic') return DEFAULT_THEME;
+  return DEFAULT_THEME;
+}
+
+function themePalette(theme: string): ThemePalette {
+  return THEME_PALETTES[normalizeTheme(theme)];
+}
+
 // Tauri backend integration
 class TauriGameManager {
   private gameStats: GameStats | null = null;
@@ -47,6 +124,9 @@ class TauriGameManager {
       this.gameStats = await invoke<GameStats>('load_game_state');
       this.gameStats.settings.difficulty = normalizeDifficulty(
         this.gameStats.settings.difficulty
+      );
+      this.gameStats.settings.theme = normalizeTheme(
+        this.gameStats.settings.theme
       );
       this.updateUI();
       console.log('✅ Game state loaded from Tauri backend:', this.gameStats);
@@ -58,7 +138,7 @@ class TauriGameManager {
         total_score: 0,
         settings: {
           sound_enabled: true,
-          theme: 'classic',
+          theme: DEFAULT_THEME,
           difficulty: DEFAULT_DIFFICULTY
         }
       };
@@ -99,6 +179,9 @@ class TauriGameManager {
       this.gameStats.settings.difficulty = normalizeDifficulty(
         this.gameStats.settings.difficulty
       );
+      this.gameStats.settings.theme = normalizeTheme(
+        this.gameStats.settings.theme
+      );
       this.updateUI();
     } catch (error) {
       console.error('Failed to reset stats:', error);
@@ -112,12 +195,12 @@ class TauriGameManager {
   getSettings(): GameSettings {
     return {
       sound_enabled: this.gameStats?.settings.sound_enabled ?? true,
-      theme: this.gameStats?.settings.theme ?? 'classic',
+      theme: this.getTheme(),
       difficulty: this.getDifficulty()
     };
   }
 
-  /** Persist difficulty (and current sound/theme) via update_settings + save_game_state. */
+  /** Persist difficulty (keeping sound/theme) via update_settings + save_game_state. */
   async setDifficulty(difficulty: string): Promise<string> {
     const next = normalizeDifficulty(difficulty);
     const settings: GameSettings = {
@@ -136,16 +219,41 @@ class TauriGameManager {
     return next;
   }
 
+  getTheme(): string {
+    return normalizeTheme(this.gameStats?.settings.theme);
+  }
+
+  /** Persist theme (keeping sound/difficulty) via update_settings + save_game_state. */
+  async setTheme(theme: string): Promise<string> {
+    const next = normalizeTheme(theme);
+    const settings: GameSettings = {
+      ...this.getSettings(),
+      theme: next
+    };
+    try {
+      await invoke('update_settings', { settings });
+      await invoke('save_game_state');
+      if (this.gameStats) {
+        this.gameStats.settings = settings;
+      }
+    } catch (error) {
+      console.error('Failed to save theme:', error);
+    }
+    return next;
+  }
+
   updateUI() {
     if (!this.gameStats) return;
 
     const highScoreEl = document.getElementById('high-score');
     const gamesPlayedEl = document.getElementById('games-played');
     const difficultyEl = document.getElementById('select-difficulty') as HTMLSelectElement | null;
+    const themeEl = document.getElementById('select-theme') as HTMLSelectElement | null;
 
     if (highScoreEl) highScoreEl.textContent = this.gameStats.high_score.toString();
     if (gamesPlayedEl) gamesPlayedEl.textContent = this.gameStats.games_played.toString();
     if (difficultyEl) difficultyEl.value = this.getDifficulty();
+    if (themeEl) themeEl.value = this.getTheme();
   }
 
   showNotification(title: string, score: number) {
@@ -192,6 +300,8 @@ class SnakeGame {
   private turnQueue: Point[] = [];
   private score = 0;
   private difficulty = DEFAULT_DIFFICULTY;
+  private theme = DEFAULT_THEME;
+  private palette = themePalette(DEFAULT_THEME);
   private stepMs = baseStepMs(DEFAULT_DIFFICULTY);
   private status: GameStatus = 'idle';
   private won = false;
@@ -226,6 +336,16 @@ class SnakeGame {
 
   getDifficulty() {
     return this.difficulty;
+  }
+
+  setTheme(theme: string) {
+    this.theme = normalizeTheme(theme);
+    this.palette = themePalette(this.theme);
+    this.draw();
+  }
+
+  getTheme() {
+    return this.theme;
   }
 
   newGame() {
@@ -393,14 +513,14 @@ class SnakeGame {
   }
 
   private draw() {
-    const { ctx } = this;
+    const { ctx, palette } = this;
     const size = this.gridSize * this.tileCount;
 
-    ctx.fillStyle = '#1a1a2e';
+    ctx.fillStyle = palette.background;
     ctx.fillRect(0, 0, size, size);
 
     // Grid, batched into a single path
-    ctx.strokeStyle = '#16213e';
+    ctx.strokeStyle = palette.grid;
     ctx.beginPath();
     for (let i = 0; i <= this.tileCount; i++) {
       ctx.moveTo(i * this.gridSize, 0);
@@ -412,7 +532,7 @@ class SnakeGame {
 
     // Snake
     this.snake.forEach((segment, index) => {
-      const color = index === 0 ? '#00ff41' : '#0f9';
+      const color = index === 0 ? palette.snakeHead : palette.snakeBody;
       ctx.fillStyle = color;
       ctx.shadowColor = color;
       ctx.shadowBlur = index === 0 ? 15 : 10;
@@ -426,8 +546,8 @@ class SnakeGame {
 
     // Food
     ctx.shadowBlur = 20;
-    ctx.shadowColor = '#ff006e';
-    ctx.fillStyle = '#ff006e';
+    ctx.shadowColor = palette.food;
+    ctx.fillStyle = palette.food;
     ctx.beginPath();
     ctx.arc(
       this.food.x * this.gridSize + this.gridSize / 2,
@@ -453,7 +573,7 @@ class SnakeGame {
   }
 
   private drawOverlay(title: string, ...lines: string[]) {
-    const { ctx } = this;
+    const { ctx, palette } = this;
     const size = this.gridSize * this.tileCount;
     const center = size / 2;
 
@@ -461,11 +581,11 @@ class SnakeGame {
     ctx.fillRect(0, 0, size, size);
 
     ctx.textAlign = 'center';
-    ctx.fillStyle = '#ff006e';
+    ctx.fillStyle = palette.overlayTitle;
     ctx.font = 'bold 40px "Segoe UI", sans-serif';
     ctx.fillText(title, center, center - 20);
 
-    ctx.fillStyle = '#ffffff';
+    ctx.fillStyle = palette.overlayText;
     ctx.font = '18px "Segoe UI", sans-serif';
     lines.forEach((line, i) => ctx.fillText(line, center, center + 20 + i * 28));
   }
@@ -479,6 +599,7 @@ async function initApp() {
   const btnPause = document.getElementById('btn-pause') as HTMLButtonElement | null;
   const btnResetStats = document.getElementById('btn-reset-stats');
   const selectDifficulty = document.getElementById('select-difficulty') as HTMLSelectElement | null;
+  const selectTheme = document.getElementById('select-theme') as HTMLSelectElement | null;
 
   const game = new SnakeGame('game-area', (status) => {
     if (!btnPause) return;
@@ -486,15 +607,25 @@ async function initApp() {
     btnPause.disabled = status !== 'running' && status !== 'paused';
   });
 
-  // Restore difficulty from disk and sync the dropdown + game speed
+  // Restore difficulty + theme from disk and sync dropdowns / drawing
   const savedDifficulty = tauriManager.getDifficulty();
   game.setDifficulty(savedDifficulty);
   if (selectDifficulty) selectDifficulty.value = savedDifficulty;
+
+  const savedTheme = tauriManager.getTheme();
+  game.setTheme(savedTheme);
+  if (selectTheme) selectTheme.value = savedTheme;
 
   selectDifficulty?.addEventListener('change', async () => {
     const next = await tauriManager.setDifficulty(selectDifficulty.value);
     game.setDifficulty(next);
     selectDifficulty.blur();
+  });
+
+  selectTheme?.addEventListener('change', async () => {
+    const next = await tauriManager.setTheme(selectTheme.value);
+    game.setTheme(next);
+    selectTheme.blur();
   });
 
   // Blur after clicking so Space/Enter go to the game instead of re-clicking the button
@@ -515,6 +646,9 @@ async function initApp() {
       const difficulty = tauriManager.getDifficulty();
       game.setDifficulty(difficulty);
       if (selectDifficulty) selectDifficulty.value = difficulty;
+      const theme = tauriManager.getTheme();
+      game.setTheme(theme);
+      if (selectTheme) selectTheme.value = theme;
     }
   });
 
