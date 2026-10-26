@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { chooseAiDirection } from './ai';
 
 // Game state interface (mirrors the Rust `GameState` struct)
 interface GameSettings {
@@ -305,6 +306,8 @@ class SnakeGame {
   private stepMs = baseStepMs(DEFAULT_DIFFICULTY);
   private status: GameStatus = 'idle';
   private won = false;
+  private aiEnabled = false;
+  private aiRestartTimer = 0;
   private rafId = 0;
   private lastTime = 0;
   private accumulator = 0;
@@ -348,7 +351,27 @@ class SnakeGame {
     return this.theme;
   }
 
+  setAiEnabled(enabled: boolean) {
+    this.aiEnabled = enabled;
+    if (!enabled && this.aiRestartTimer) {
+      window.clearTimeout(this.aiRestartTimer);
+      this.aiRestartTimer = 0;
+    }
+    // Mirror original ai-init onInit → startAIGame when enabling from idle/over.
+    if (enabled && (this.status === 'idle' || this.status === 'over')) {
+      this.newGame();
+    }
+  }
+
+  isAiEnabled() {
+    return this.aiEnabled;
+  }
+
   newGame() {
+    if (this.aiRestartTimer) {
+      window.clearTimeout(this.aiRestartTimer);
+      this.aiRestartTimer = 0;
+    }
     this.resetState();
     tauriManager.updateScore(0);
     this.run();
@@ -414,6 +437,8 @@ class SnakeGame {
       const dir = KEY_TO_DIRECTION[e.key];
       if (!dir) return;
       e.preventDefault();
+      // AI owns steering while autoplay is on (Space/Enter still work above).
+      if (this.aiEnabled) return;
       if (this.status === 'running') this.queueTurn(dir);
     });
 
@@ -463,8 +488,19 @@ class SnakeGame {
   };
 
   private step() {
-    const turn = this.turnQueue.shift();
-    if (turn) this.direction = turn;
+    if (this.aiEnabled) {
+      this.turnQueue = [];
+      this.direction = chooseAiDirection({
+        snake: this.snake,
+        food: this.food,
+        direction: this.direction,
+        width: this.tileCount,
+        height: this.tileCount,
+      });
+    } else {
+      const turn = this.turnQueue.shift();
+      if (turn) this.direction = turn;
+    }
 
     const head = {
       x: this.snake[0].x + this.direction.x,
@@ -509,7 +545,16 @@ class SnakeGame {
     this.setStatus('over');
     this.draw();
     // Persist through the Rust backend, then redraw so the overlay shows the new best
-    void tauriManager.onGameEnd(this.score).then(() => this.draw());
+    void tauriManager.onGameEnd(this.score).then(() => {
+      this.draw();
+      // Optional continuous autoplay (original ai-init leaves this to onDeath → startAIGame).
+      if (this.aiEnabled) {
+        this.aiRestartTimer = window.setTimeout(() => {
+          this.aiRestartTimer = 0;
+          if (this.aiEnabled && this.status === 'over') this.newGame();
+        }, 900);
+      }
+    });
   }
 
   private draw() {
@@ -600,6 +645,7 @@ async function initApp() {
   const btnResetStats = document.getElementById('btn-reset-stats');
   const selectDifficulty = document.getElementById('select-difficulty') as HTMLSelectElement | null;
   const selectTheme = document.getElementById('select-theme') as HTMLSelectElement | null;
+  const toggleAi = document.getElementById('toggle-ai') as HTMLInputElement | null;
 
   const game = new SnakeGame('game-area', (status) => {
     if (!btnPause) return;
@@ -626,6 +672,12 @@ async function initApp() {
     const next = await tauriManager.setTheme(selectTheme.value);
     game.setTheme(next);
     selectTheme.blur();
+  });
+
+  // Session-only AI toggle (original does not persist autoplay preference).
+  toggleAi?.addEventListener('change', () => {
+    game.setAiEnabled(toggleAi.checked);
+    toggleAi.blur();
   });
 
   // Blur after clicking so Space/Enter go to the game instead of re-clicking the button

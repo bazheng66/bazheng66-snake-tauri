@@ -252,6 +252,19 @@
         box-shadow: 0 0 0 3px rgba(255,255,255,0.45), 0 6px 20px rgba(0,0,0,0.3);
       }
 
+
+      .settings-control input[type="checkbox"] {
+        width: 18px;
+        height: 18px;
+        accent-color: #667eea;
+        cursor: pointer;
+      }
+
+      .settings-control.checkbox-control label {
+        cursor: pointer;
+        user-select: none;
+      }
+
       /* Loading spinner */
       .loading {
         color: white;
@@ -312,6 +325,10 @@
             <option value="neon">Neon</option>
             <option value="golden">Golden</option>
           </select>
+        </div>
+        <div class="settings-control checkbox-control">
+          <input type="checkbox" id="toggle-ai" />
+          <label for="toggle-ai">AI Autoplay</label>
         </div>
       </div>
 
