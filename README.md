@@ -10,9 +10,9 @@
 |------|-----------:|--------------:|------|
 | 安装包 | **1.09 MB**（NSIS） | 未打包 | — |
 | 主程序 / 运行时体积 | **3.35 MB**（`snake-tauri.exe`） | 357 MB（`electron.exe` + Chromium 运行时，未打包） | Tauri 小约 **100 倍** |
-| 冷启动到窗口出现（5 次中位数） | **约 128 ms** | 约 390–405 ms | Tauri 快约 **3 倍** |
-| 内存（工作集，含渲染进程） | 约 440–457 MB（7 个进程） | 约 360–369 MB（4 个进程） | ⚠️ **Electron 更低** |
-| 内存（私有字节） | 约 252–259 MB | 约 213 MB | ⚠️ **Electron 更低** |
+| 冷启动到窗口出现（5 次中位数） | **114 ms**（96, 97, 114, 126, 468） | **360 ms**（326, 359, 360, 363, 1681） | Tauri 快约 **3 倍** |
+| 内存（工作集，含渲染进程） | **451.7 MB**（7 个进程） | **372.2 MB**（4 个进程） | ⚠️ **Electron 更低** |
+| 内存（私有字节） | **260.0 MB** | **219.7 MB** | ⚠️ **Electron 更低** |
 
 ### 怎么理解这些数字
 
@@ -52,10 +52,12 @@ powershell -ExecutionPolicy Bypass -File bench/measure.ps1 -Exe bench/electron/n
 
 - 经典玩法：方向键 / WASD 移动，吃到食物变长，撞墙或撞到自己结束
 - 空格暂停/继续，回车开始/重开；窗口最小化时自动暂停
-- 速度随分数提高（每步 120ms → 最快 55ms）
+- 五档难度（Easy / Medium / Hard / Impossible / Rush），设置由 Rust 后端持久化
+- 五套 Canvas 主题（Main / Dark / Matrix / Neon / Golden）
+- 可选 AI Autoplay（BFS 寻路，会话内开关）
 - 转向输入队列：快速连按两个方向（如右行时 ↑←）会按顺序执行，不会因为 180° 掉头撞到自己
 - 棋盘大小随窗口缩放，保持正方形
-- 最高分、游戏局数、累计分数由 Rust 后端保存
+- 最高分、游戏局数、累计分数与设置由 Rust 后端保存
 
 ## 架构
 
@@ -101,6 +103,7 @@ npm run tauri build
 snake-tauri/
 ├── index.html              # 页面 + 样式
 ├── src/main.ts             # 游戏引擎、渲染、输入、Tauri 调用
+├── src/ai.ts               # AI Autoplay（BFS）
 ├── src-tauri/
 │   ├── src/lib.rs          # Rust 后端：状态、持久化、commands
 │   ├── src/main.rs         # 入口，调用 lib::run()
@@ -116,7 +119,7 @@ snake-tauri/
 
 ## 后续计划
 
-- 主题切换、音效、难度选择（后端已经有 `GameSettings` 和 `update_settings`，前端还没接上）
+- 音效（后端已有 `sound_enabled`，前端尚未接）
 - 道具与更多游戏模式
 - 在 macOS / Linux 上做同样的体积和内存测量
 
